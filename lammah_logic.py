@@ -19,52 +19,46 @@ class LammahDecisionEngine:
             return "summer_wear"
         return "neutral"
 
-    def analyze(self, url, stock, city):
-        # 1. المرحلة الأولى: فلتر المخزون (Inventory Priority)
+    def analyze(self, url, stock, city, daily_sales=None):
+        # 1. المرحلة الأولى: تصنيف المنتج
         product_type = self.classify_product(url)
         product_name = url.split('/')[-1].replace('-', ' ').title() or "Product"
+        
+        # 2. محرك التنبؤ (Prediction Engine)
+        # محاكاة معدل البيع إذا لم يتوفر ربط حقيقي بعد
+        avg_daily_sales = daily_sales if daily_sales else random.randint(2, 10)
+        days_until_out_of_stock = round(stock / avg_daily_sales) if avg_daily_sales > 0 else 999
+        
+        # نظام الإشارات (🔴🟡🟢)
+        status_color = "🟢" if days_until_out_of_stock > 7 else "🟡" if days_until_out_of_stock > 3 else "🔴"
+        
+        # اقتراح كمية إعادة الطلب لتغطية 30 يوم
+        reorder_quantity = max(0, (avg_daily_sales * 30) - stock)
 
-        # تحديد عتبة المخزون المنخفض سياقياً
-        low_stock_limit = 15 if product_type != "neutral" else 5
+        city_data = self.weather_db.get(city, {"temp": 25, "season": "neutral"})
+        score = 70 
 
         if stock <= 0:
             return {
                 "product": product_name, "action": "Zero Budget 🛑",
-                "reason": "Stock is empty. Advertising stopped to save budget.", "score": 0
+                "reason": "نفد المخزون! أوقف الإعلانات فوراً لتجنب الهدر.", "score": 0,
+                "prediction": {"days": 0, "status": "🔴", "reorder": reorder_quantity}
             }
+
+        prediction_msg = f" | المتوقع نفاده خلال {days_until_out_of_stock} أيام {status_color}"
         
-        if stock < low_stock_limit:
-            return {
-                "product": product_name, "action": "Reduce Budget ⚠️",
-                "reason": f"Low stock ({stock} units). Scaling down to avoid overselling.", "score": 30
-            }
-
-        # 2. المرحلة الثانية: منطق الطقس (Weather Logic)
-        city_data = self.weather_db.get(city, {"temp": 25, "season": "neutral"})
-        score = 70 # درجة أساسية
-        weather_comment = "Weather is compatible."
-
-        if city_data["season"] == "winter" and product_type == "summer_wear":
-            score -= 40
-            weather_comment = f"Product is summer-wear, but {city} is cold ({city_data['temp']}°C)."
-        elif city_data["season"] == "winter" and product_type == "winter_wear":
-            score += 20
-            weather_comment = f"Perfect match! High demand for winter gear in {city}."
-
-        # 3. المرحلة الثالثة: المحاكاة للترند (Saudi Trends)
-        trends = ["Winter Camping", "Riyadh Season", "Founding Day", "Modest Fashion"]
-        current_trend = random.choice(trends)
-        if "Winter" in current_trend and product_type == "winter_wear":
-            score += 10
-            weather_comment += f" | Trending: {current_trend} on TikTok KSA."
-
-        # القرار النهائي
         final_score = min(max(score, 0), 100)
         action = "Scale Up 🚀" if final_score > 80 else "Maintain ✅" if final_score > 50 else "Reduce ⚠️"
 
         return {
             "product": product_name,
             "action": action,
-            "reason": weather_comment,
-            "score": final_score
+            "reason": f"المخزون {stock} قطعة. {prediction_msg}",
+            "score": final_score,
+            "prediction": {
+                "days": days_until_out_of_stock,
+                "status": status_color,
+                "reorder": reorder_quantity,
+                "daily_avg": avg_daily_sales
+            }
         }
