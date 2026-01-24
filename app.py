@@ -1,4 +1,3 @@
-# app.py
 import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -12,10 +11,11 @@ import requests
 app = Flask(__name__)
 CORS(app) 
 
-# --- الإعدادات ---
+# --- الإعدادات وقراءة المفاتيح البيئية ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 MOYASAR_SECRET_KEY = os.environ.get("MOYASAR_SECRET_KEY")
+GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDS") # محتوى ملف الـ JSON كاملاً
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL else None
 engine = LammahDecisionEngine()
@@ -40,37 +40,47 @@ def analyze_sheet():
         data = request.json
         sheet_url = data.get('sheet_url')
         
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
+        # --- الجزء المعدل: قراءة مفاتيح قوقل من الذاكرة وليس من ملف ---
+        if not GOOGLE_CREDS_JSON:
+            return jsonify({"error": "Google Credentials missing in Render settings"}), 500
+        
+        creds_dict = json.loads(GOOGLE_CREDS_JSON)
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
+        # التحقق باستخدام القاموس (Dictionary) مباشرة
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
+        # --------------------------------------------------------
+
         sheet = client.open_by_url(sheet_url).sheet1
         all_records = sheet.get_all_records()
 
         final_products = []
         for row in all_records:
-            name = row.get('المنتج') or "منتج غير معروف"
+            # نحاول قراءة الأعمدة بالعربية كما هي في قوقل شيت
+            name = row.get('المنتج') or row.get('اسم المنتج') or "منتج غير معروف"
             try:
                 stock = int(row.get('المخزون', 0))
             except:
                 stock = 0
             
-            # --- استخدام محرك الذكاء (lammah_logic) هنا ---
-            # نرسل اسم المنتج كـ url لكي يحاول تصنيفه (شتوي/صيفي)
+            # استدعاء محرك الذكاء من ملف lammah_logic
             analysis = engine.analyze(url=name, stock=stock, city="Riyadh")
             
             final_products.append({
                 "name": name,
                 "stock": stock,
-                # هنا نعرض النتيجة الذكية من ملف المنطق
                 "recommendation": f"{analysis['action']}: {analysis['reason']}"
             })
             
         return jsonify({"products": final_products}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # إذا كان الخطأ متعلق بقوقل شيت (مثلاً لم تتم المشاركة)
+        return jsonify({"error": f"Connection Error: {str(e)}"}), 500
 
-    
-# --- مسار ميسر المكتمل ---
 @app.route('/api/create-payment', methods=['POST'])
 def create_payment():
     try:
@@ -92,14 +102,13 @@ def create_payment():
         )
         
         res_data = response.json()
-        # إرجاع رابط الدفع للواجهة
         return jsonify({"payment_url": res_data.get('source', {}).get('transaction_url')}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/')
 def home():
-    return "<h1>مرحباً بك في رادار لماح 🚀</h1><p>السيرفر يعمل ومتصل بميسر وسوبابيس!</p>"
+    return "<h1>مرحباً بك في رادار لماح 🚀</h1><p>السيرفر يعمل بنظام المفاتيح السحابية ومتصل بميسر!</p>"
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
